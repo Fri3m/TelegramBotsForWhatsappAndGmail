@@ -4,8 +4,45 @@ import qrcode from 'qrcode-terminal';
 import TelegramBot from 'node-telegram-bot-api';
 import dotenv from 'dotenv';
 import Database from 'better-sqlite3';
+import fs from 'fs';
 
 dotenv.config();
+
+// Find Chrome/Chromium on the system (only needed for ARM Linux)
+function findChrome() {
+    // On Windows/x86 Linux, let Puppeteer use its bundled Chromium
+    const isARM = process.arch === 'arm64' || process.arch === 'arm';
+    const isLinux = process.platform === 'linux';
+    
+    // Only search for system browser on ARM Linux (Puppeteer doesn't have ARM binaries)
+    if (!isLinux || !isARM) {
+        return undefined;
+    }
+    
+    const paths = [
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium',
+        '/usr/bin/google-chrome',
+        '/usr/bin/google-chrome-stable',
+        '/snap/bin/chromium',
+        '/usr/lib64/chromium-browser/chromium-browser',
+        '/usr/lib/chromium-browser/chromium-browser',
+    ];
+    
+    for (const p of paths) {
+        try {
+            if (fs.existsSync(p)) {
+                console.log(`🌐 Using system browser: ${p}`);
+                return p;
+            }
+        } catch (e) {}
+    }
+    
+    console.log('⚠️ No system browser found. Install chromium: sudo dnf install chromium');
+    return undefined;
+}
+
+const chromePath = process.env.CHROME_PATH || findChrome();
 
 // Initialize SQLite database
 const db = new Database('./messages.db');
@@ -98,6 +135,7 @@ const whatsappClient = new Client({
     }),
     puppeteer: {
         headless: true,
+        ...(chromePath && { executablePath: chromePath }),
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -105,7 +143,8 @@ const whatsappClient = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
-            '--disable-gpu'
+            '--disable-gpu',
+            '--disable-extensions'
         ]
     }
 });
