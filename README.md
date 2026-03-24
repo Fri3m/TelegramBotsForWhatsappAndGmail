@@ -30,7 +30,7 @@ Forward your WhatsApp messages to one or more Telegram bots automatically.
 ### 3. Configure the App (Multi-Bot)
 
 1. Create one JSON file per bot under `bots/`.
-  You can create `general`, `connection`, and `email` mode bots.
+   You can create `general`, `connection`, and `email` mode bots.
 
    Example: `bots/general.bot.json`
 
