@@ -260,7 +260,7 @@ Gecmis:
         chatList += `• ${name} \\(${"toplam: " + chat.message_count + ", yeni: " + newIncomingCount}\\)\n  \`${chat.id}\`\n\n`;
       }
 
-      chatList += "Mesajlari gormek icin:\n/messages <isim\\> \\[sayi\\]";
+      chatList += "Mesajlari gormek icin:\n/messages \\<isim\\> \\[sayi\\]";
 
       telegramBot.sendMessage(authorizedChatId, chatList, {
         parse_mode: "MarkdownV2",
@@ -300,7 +300,7 @@ Gecmis:
 
     const name = parsed.target.name || chatId;
 
-    let text = `${escapeMarkdown(name)} - Son ${messages.length} mesaj:\n\n`;
+    let text = `${escapeMarkdown(name)} \\- Son ${messages.length} mesaj:\n\n`;
 
     for (const m of messages.reverse()) {
       const time = new Date(m.timestamp).toLocaleString("tr-TR", {
@@ -315,7 +315,7 @@ Gecmis:
     }
 
     if (text.length > 4000) {
-      text = text.substring(0, 4000) + "\n...(kisaltildi)";
+      text = text.substring(0, 4000) + "\n\\.\\.\\.\\(kisaltildi\\)";
     }
 
     telegramBot.sendMessage(authorizedChatId, text, {
@@ -335,12 +335,13 @@ Gecmis:
     if (results.length === 0) {
       telegramBot.sendMessage(
         authorizedChatId,
-        `\"${query}\" icin sonuc bulunamadi.`,
+        `\\"${escapeMarkdown(query)}\\" icin sonuc bulunamadi.`,
+        { parse_mode: "MarkdownV2" },
       );
       return;
     }
 
-    let text = `\"${escapeMarkdown(query)}\" icin ${results.length} sonuc:\n\n`;
+    let text = `\\"${escapeMarkdown(query)}\\" icin ${results.length} sonuc:\n\n`;
 
     for (const r of results) {
       const time = new Date(r.timestamp).toLocaleString("tr-TR", {
@@ -355,7 +356,7 @@ Gecmis:
     }
 
     if (text.length > 4000) {
-      text = text.substring(0, 4000) + "\n...(kisaltildi)";
+      text = text.substring(0, 4000) + "\n\\.\\.\\.\\(kisaltildi\\)";
     }
 
     telegramBot.sendMessage(authorizedChatId, text, {

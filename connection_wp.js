@@ -56,7 +56,8 @@ Devamli Mesaj:
     if (!name) {
       telegramBot.sendMessage(
         authorizedChatId,
-        "Baglanmak icin bir isim yazmaliyim. Ornek: /connect group Aile",
+        "Baglanmak icin bir isim yazmaliyim\\. Ornek: /connect group Aile",
+        { parse_mode: "MarkdownV2" },
       );
       return;
     }
@@ -68,7 +69,8 @@ Devamli Mesaj:
         runtime.activeConnection = null;
         await telegramBot.sendMessage(
           authorizedChatId,
-          `Onceki baglanti kapatildi: ${previousName}`,
+          `Onceki baglanti kapatildi: ${escapeMarkdown(previousName)}`,
+          { parse_mode: "MarkdownV2" },
         );
       }
 
@@ -77,7 +79,8 @@ Devamli Mesaj:
       if (!chat) {
         telegramBot.sendMessage(
           authorizedChatId,
-          `${targetType} icin eslesen sohbet bulunamadi: ${name}`,
+          `${escapeMarkdown(targetType)} icin eslesen sohbet bulunamadi: ${escapeMarkdown(name)}`,
+          { parse_mode: "MarkdownV2" },
         );
         return;
       }
@@ -93,7 +96,8 @@ Devamli Mesaj:
 
       telegramBot.sendMessage(
         authorizedChatId,
-        `Baglandi: ${chatName} (${runtime.activeConnection.type})\nID: ${chatId}`,
+        `Baglandi: ${escapeMarkdown(chatName)} \\(${escapeMarkdown(runtime.activeConnection.type)}\\)\nID: \`${chatId}\``,
+        { parse_mode: "MarkdownV2" },
       );
     } catch (error) {
       telegramBot.sendMessage(authorizedChatId, `Hata: ${error.message}`);
@@ -113,7 +117,8 @@ Devamli Mesaj:
     runtime.activeConnection = null;
     telegramBot.sendMessage(
       authorizedChatId,
-      `Baglanti kapatildi: ${previousName}`,
+      `Baglanti kapatildi: ${escapeMarkdown(previousName)}`,
+      { parse_mode: "MarkdownV2" },
     );
   });
 
@@ -143,10 +148,48 @@ Devamli Mesaj:
       );
       telegramBot.sendMessage(
         authorizedChatId,
-        `Gonderildi: ${runtime.activeConnection.name}`,
+        `Gonderildi: ${escapeMarkdown(runtime.activeConnection.name)}`,
+        { parse_mode: "MarkdownV2" },
       );
     } catch (error) {
       telegramBot.sendMessage(authorizedChatId, `Hata: ${error.message}`);
+    }
+  });
+
+  // Direct message handler: send all messages to active connection
+  telegramBot.on("message", async (msg) => {
+    if (!isAuthorized(msg)) return;
+
+    // Skip commands and service messages
+    if (msg.text && msg.text.startsWith("/")) return;
+    if (msg.successful_payment || msg.new_chat_participant) return;
+
+    if (!runtime.activeConnection) {
+      telegramBot.sendMessage(
+        authorizedChatId,
+        "Aktif baglanti yok\\. Mesaj gonderilemedi\\. Once /connect ile baglan\\.",
+        { parse_mode: "MarkdownV2" },
+      );
+      return;
+    }
+
+    try {
+      const messageText = msg.text || "[Media]";
+      await whatsappClient.sendMessage(
+        runtime.activeConnection.id,
+        messageText,
+      );
+      await recordOutgoingMessage(
+        runtime.activeConnection.id,
+        messageText,
+        `Telegram (${runtime.config.name})`,
+      );
+    } catch (error) {
+      telegramBot.sendMessage(
+        authorizedChatId,
+        `Gonderilemedi: ${escapeMarkdown(error.message)}`,
+        { parse_mode: "MarkdownV2" },
+      );
     }
   });
 }
