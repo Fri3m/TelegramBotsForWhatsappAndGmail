@@ -170,7 +170,7 @@ function loadBotConfigs() {
   const botDir = ensureBotConfigDir();
   const files = fs
     .readdirSync(botDir)
-    .filter((f) => f.endsWith(".json") && f !== "example.bot.json");
+    .filter((f) => f.endsWith(".json") && !f.startsWith("example."));
 
   const configs = [];
 
@@ -197,6 +197,21 @@ function loadBotConfigs() {
         token: String(parsed.token).trim(),
         chatId: String(parsed.chatId).trim(),
         mode,
+        email_accounts: Array.isArray(parsed.email_accounts)
+          ? parsed.email_accounts
+              .map((item) => ({
+                name: String(item?.name || item?.email || "").trim(),
+                email: String(item?.email || "").trim(),
+                password: String(item?.password || "").replace(/\s+/g, ""),
+              }))
+              .filter((item) => item.email && item.password)
+          : [],
+        gmail_email: parsed.gmail_email
+          ? String(parsed.gmail_email).trim()
+          : "",
+        gmail_password: parsed.gmail_password
+          ? String(parsed.gmail_password).replace(/\s+/g, "")
+          : "",
       });
     } catch (error) {
       console.error(`Failed to load ${file}:`, error.message);
@@ -248,9 +263,42 @@ function createRuntime(config) {
   };
 
   if (config.mode === "email") {
+    const accounts = [];
+
+    if (Array.isArray(config.email_accounts)) {
+      for (const item of config.email_accounts) {
+        if (!item) continue;
+        const email = String(item.email || "").trim();
+        const password = String(item.password || "").replace(/\s+/g, "");
+        const name = String(item.name || email).trim();
+        if (!email || !password) continue;
+        accounts.push({ email, password, name });
+      }
+    }
+
+    // Backward compatibility: single account fields.
+    const singleEmail = String(config.gmail_email || "").trim();
+    const singlePassword = String(config.gmail_password || "").replace(
+      /\s+/g,
+      "",
+    );
+    if (singleEmail && singlePassword) {
+      accounts.push({
+        email: singleEmail,
+        password: singlePassword,
+        name: singleEmail,
+      });
+    }
+
+    const deduped = new Map();
+    for (const account of accounts) {
+      if (!deduped.has(account.email)) {
+        deduped.set(account.email, account);
+      }
+    }
+
     runtime.emailConfig = {
-      email: config.gmail_email || "",
-      password: config.gmail_password || "",
+      accounts: Array.from(deduped.values()),
     };
   }
 
@@ -259,9 +307,9 @@ function createRuntime(config) {
 
 function setupBotHandlers(runtime) {
   if (runtime.config.mode === "email") {
-    if (!runtime.emailConfig?.email || !runtime.emailConfig?.password) {
+    if (!runtime.emailConfig?.accounts?.length) {
       console.error(
-        `Email bot ${runtime.config.name} requires gmail_email and gmail_password in config`,
+        `Email bot ${runtime.config.name} requires email account config (email_accounts or gmail_email/gmail_password).`,
       );
       return;
     }
@@ -369,6 +417,11 @@ async function sendToRuntime(
 }
 
 function isRuntimeEligibleForChat(runtime, whatsappChatId) {
+  // Email bot should never receive WhatsApp forwarded messages.
+  if (runtime.config.mode === "email") {
+    return false;
+  }
+
   if (!whatsappChatId) {
     return true;
   }

@@ -23,8 +23,18 @@ Gmail hesaptan "uygulama şifresi" oluşturmalısın (normal şifre çalışmaz)
   "mode": "email",
   "token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
   "chatId": "YOUR_TELEGRAM_CHAT_ID_HERE",
-  "gmail_email": "your-email@gmail.com",
-  "gmail_password": "app-password-16-chars"
+  "email_accounts": [
+    {
+      "name": "Personal",
+      "email": "your-email@gmail.com",
+      "password": "app-password-16-chars"
+    },
+    {
+      "name": "Work",
+      "email": "your-work@gmail.com",
+      "password": "work-app-password-16-chars"
+    }
+  ]
 }
 ```
 
@@ -34,8 +44,23 @@ Gmail hesaptan "uygulama şifresi" oluşturmalısın (normal şifre çalışmaz)
 - `mode`: **"email"** olmalı
 - `token`: @BotFather'dan aldığın Telegram bot token'u
 - `chatId`: Mesajları almak istediğin Telegram chat ID'si
-- `gmail_email`: Gmail hesap email adresi
-- `gmail_password`: Gmail 16-karakterlik uygulama şifresi
+- `email_accounts`: Bir veya daha fazla Gmail hesabı
+- `email_accounts[].name`: Hesap etiketi (opsiyonel)
+- `email_accounts[].email`: Gmail hesap email adresi
+- `email_accounts[].password`: Gmail 16-karakterlik uygulama şifresi
+
+Geriye uyumluluk için tek hesap formatı da çalışır:
+
+```json
+{
+  "name": "Email Bot",
+  "mode": "email",
+  "token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+  "chatId": "YOUR_TELEGRAM_CHAT_ID_HERE",
+  "gmail_email": "your-email@gmail.com",
+  "gmail_password": "app-password-16-chars"
+}
+```
 
 ## 3. Bot Komutları
 
@@ -63,7 +88,7 @@ Senin Telegram chat ID'nini bulmak için:
 
 ### "Email config missing" hatası
 
-- Config dosyasında `gmail_email` ve `gmail_password` ayarlandı mı kontrol et
+- Config dosyasında `email_accounts` içinde en az bir hesap var mı kontrol et
 - Email adresi ve şifre doğru mu kontrol et
 
 ### IMAP bağlantı hatası
