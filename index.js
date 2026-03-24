@@ -335,11 +335,23 @@ async function sendToRuntime(
   }
 }
 
+function isRuntimeEligibleForChat(runtime, whatsappChatId) {
+  if (!whatsappChatId) {
+    return true;
+  }
+
+  if (runtime.config.mode !== "connection") {
+    return true;
+  }
+
+  return runtime.activeConnection?.id === whatsappChatId;
+}
+
 async function sendToAllBots(text, whatsappChatId = null, options = {}) {
   await Promise.all(
-    botRuntimes.map((runtime) =>
-      sendToRuntime(runtime, text, whatsappChatId, options),
-    ),
+    botRuntimes
+      .filter((runtime) => isRuntimeEligibleForChat(runtime, whatsappChatId))
+      .map((runtime) => sendToRuntime(runtime, text, whatsappChatId, options)),
   );
 }
 
@@ -391,6 +403,10 @@ async function sendMediaToAllBots(message, caption, whatsappChatId = null) {
     const mimeType = media.mimetype;
 
     for (const runtime of botRuntimes) {
+      if (!isRuntimeEligibleForChat(runtime, whatsappChatId)) {
+        continue;
+      }
+
       try {
         await sendMediaToRuntime(
           runtime,
