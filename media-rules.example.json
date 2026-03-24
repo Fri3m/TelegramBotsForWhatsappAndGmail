@@ -1,0 +1,10 @@
+{
+  "skipMediaStorageChatIds": [
+    "905xxxxxxxxx@c.us",
+    "1203630xxxxxxxx@g.us"
+  ],
+  "skipMediaStorageNamePatterns": [
+    "aile",
+    "is grubu"
+  ]
+}

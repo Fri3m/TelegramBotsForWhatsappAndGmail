@@ -10,6 +10,9 @@ Run Telegram bots for both WhatsApp and Gmail: forward WhatsApp messages and rec
 - 🖼️ Supports images, videos, audio, and documents
 - 👥 Works with both private chats and groups
 - 📍 Forwards location messages
+- 🗂️ Stores incoming WhatsApp media files on disk with metadata in SQLite
+- 🚫 Supports per-chat/group media storage exclusions (shows only `[media]`)
+- 🧹 Deletes media older than 7 days automatically every day at 00:00
 - 💾 Saves WhatsApp session (no need to scan QR every time)
 
 ## Setup
@@ -112,6 +115,29 @@ Notes for email mode:
 - Auto-check notifies only mails that arrived since the last check.
 
 Detailed email setup: see `EMAIL_SETUP.md`.
+
+Media storage policy:
+
+- Incoming WhatsApp media is saved under `media/YYYY-MM-DD/...`
+- Media metadata is stored in `messages.db` table: `media_files`
+- To skip media storage for specific chats/groups, create `media-rules.json` in project root
+
+`media-rules.json` example:
+
+```json
+{
+  "skipMediaStorageChatIds": [
+    "905xxxxxxxxx@c.us",
+    "1203630xxxxxxxx@g.us"
+  ],
+  "skipMediaStorageNamePatterns": [
+    "aile",
+    "is grubu"
+  ]
+}
+```
+
+Template file: `media-rules.example.json`.
 
 Press `Ctrl+C` to stop the app gracefully.
 

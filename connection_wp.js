@@ -1,3 +1,7 @@
+import pkg from "whatsapp-web.js";
+
+const { MessageMedia } = pkg;
+
 export function registerConnectionHandlers({
   runtime,
   whatsappClient,
@@ -10,6 +14,73 @@ export function registerConnectionHandlers({
 
   function isAuthorized(msg) {
     return msg.chat.id.toString() === authorizedChatId;
+  }
+
+  async function buildWhatsAppPayloadFromTelegram(msg) {
+    if (msg.photo?.length) {
+      const bestPhoto = msg.photo[msg.photo.length - 1];
+      const fileLink = await telegramBot.getFileLink(bestPhoto.file_id);
+      const response = await fetch(fileLink);
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      return {
+        payload: new MessageMedia("image/jpeg", base64, "telegram-photo.jpg"),
+        options: msg.caption ? { caption: msg.caption } : {},
+        recordText: msg.caption || "[photo]",
+      };
+    }
+
+    if (msg.document?.file_id) {
+      const fileLink = await telegramBot.getFileLink(msg.document.file_id);
+      const response = await fetch(fileLink);
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      return {
+        payload: new MessageMedia(
+          msg.document.mime_type || "application/octet-stream",
+          base64,
+          msg.document.file_name || "telegram-document",
+        ),
+        options: msg.caption ? { caption: msg.caption } : {},
+        recordText: msg.caption || `[document] ${msg.document.file_name || "file"}`,
+      };
+    }
+
+    if (msg.video?.file_id) {
+      const fileLink = await telegramBot.getFileLink(msg.video.file_id);
+      const response = await fetch(fileLink);
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      return {
+        payload: new MessageMedia("video/mp4", base64, "telegram-video.mp4"),
+        options: msg.caption ? { caption: msg.caption } : {},
+        recordText: msg.caption || "[video]",
+      };
+    }
+
+    if (msg.audio?.file_id || msg.voice?.file_id) {
+      const mediaFileId = msg.audio?.file_id || msg.voice?.file_id;
+      const fileLink = await telegramBot.getFileLink(mediaFileId);
+      const response = await fetch(fileLink);
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      return {
+        payload: new MessageMedia("audio/ogg", base64, "telegram-audio.ogg"),
+        options: msg.caption ? { caption: msg.caption } : {},
+        recordText: msg.caption || "[audio]",
+      };
+    }
+
+    const text = (msg.text || "").trim();
+    return {
+      payload: text,
+      options: {},
+      recordText: text,
+    };
   }
 
   telegramBot.onText(/\/start/, (msg) => {
@@ -174,14 +245,23 @@ Devamli Mesaj:
     }
 
     try {
-      const messageText = msg.text || "[Media]";
+      const outgoing = await buildWhatsAppPayloadFromTelegram(msg);
+      if (!outgoing.recordText) {
+        telegramBot.sendMessage(
+          authorizedChatId,
+          "Gonderilecek metin veya medya bulunamadi.",
+        );
+        return;
+      }
+
       await whatsappClient.sendMessage(
         runtime.activeConnection.id,
-        messageText,
+        outgoing.payload,
+        outgoing.options,
       );
       await recordOutgoingMessage(
         runtime.activeConnection.id,
-        messageText,
+        outgoing.recordText,
         `Telegram (${runtime.config.name})`,
       );
     } catch (error) {

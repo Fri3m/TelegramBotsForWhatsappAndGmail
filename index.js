@@ -70,6 +70,23 @@ db.exec(`
       last_reset_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (chat_id) REFERENCES chats(id)
     );
+
+    CREATE TABLE IF NOT EXISTS media_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id TEXT NOT NULL,
+      sender_name TEXT,
+      message_type TEXT,
+      mime_type TEXT,
+      file_path TEXT,
+      file_size INTEGER,
+      caption TEXT,
+      stored INTEGER DEFAULT 1,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (chat_id) REFERENCES chats(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_media_files_chat_id ON media_files(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_media_files_timestamp ON media_files(timestamp);
 `);
 
 const insertChat = db.prepare(`
@@ -138,6 +155,31 @@ const getChatStats = db.prepare(`
     SELECT COUNT(*) as total_messages, COUNT(DISTINCT chat_id) as total_chats FROM messages
 `);
 
+const insertMediaFile = db.prepare(`
+  INSERT INTO media_files (
+    chat_id,
+    sender_name,
+    message_type,
+    mime_type,
+    file_path,
+    file_size,
+    caption,
+    stored
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`);
+
+const getMediaFilesOlderThanOneWeek = db.prepare(`
+  SELECT id, file_path
+  FROM media_files
+  WHERE stored = 1
+    AND timestamp < datetime('now', '-7 day')
+`);
+
+const deleteMediaRecordsOlderThanOneWeek = db.prepare(`
+  DELETE FROM media_files
+  WHERE timestamp < datetime('now', '-7 day')
+`);
+
 function escapeMarkdown(text) {
   if (!text) return "";
   return text.replace(/[_*\[\]()~`>#+=|{}.!-]/g, "\\$&");
@@ -164,6 +206,180 @@ function ensureBotConfigDir() {
     fs.mkdirSync(dir, { recursive: true });
   }
   return dir;
+}
+
+function loadMediaStorageRules() {
+  const defaults = {
+    skipMediaStorageChatIds: [],
+    skipMediaStorageNamePatterns: [],
+  };
+
+  const rulesPath = path.resolve("./media-rules.json");
+  if (!fs.existsSync(rulesPath)) {
+    return defaults;
+  }
+
+  try {
+    const raw = fs.readFileSync(rulesPath, "utf-8");
+    const parsed = JSON.parse(raw);
+    return {
+      skipMediaStorageChatIds: Array.isArray(parsed.skipMediaStorageChatIds)
+        ? parsed.skipMediaStorageChatIds.map((x) => String(x).trim())
+        : [],
+      skipMediaStorageNamePatterns: Array.isArray(
+        parsed.skipMediaStorageNamePatterns,
+      )
+        ? parsed.skipMediaStorageNamePatterns
+            .map((x) => String(x).trim())
+            .filter(Boolean)
+        : [],
+    };
+  } catch (error) {
+    console.error("Failed to parse media-rules.json, using defaults.");
+    return defaults;
+  }
+}
+
+function saveMediaStorageRules(rules) {
+  const rulesPath = path.resolve("./media-rules.json");
+  const payload = {
+    skipMediaStorageChatIds: Array.isArray(rules.skipMediaStorageChatIds)
+      ? Array.from(new Set(rules.skipMediaStorageChatIds.map((x) => String(x).trim()))).filter(Boolean)
+      : [],
+    skipMediaStorageNamePatterns: Array.isArray(rules.skipMediaStorageNamePatterns)
+      ? Array.from(
+          new Set(rules.skipMediaStorageNamePatterns.map((x) => String(x).trim())),
+        ).filter(Boolean)
+      : [],
+  };
+
+  fs.writeFileSync(rulesPath, JSON.stringify(payload, null, 2), "utf-8");
+}
+
+function ensureMediaDir() {
+  const mediaDir = path.resolve("./media");
+  if (!fs.existsSync(mediaDir)) {
+    fs.mkdirSync(mediaDir, { recursive: true });
+  }
+  return mediaDir;
+}
+
+function sanitizeFilePart(value) {
+  return String(value || "unknown").replace(/[^a-zA-Z0-9._-]/g, "_");
+}
+
+function getExtensionFromMime(mimeType) {
+  if (!mimeType) return "bin";
+  const map = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "video/mp4": "mp4",
+    "audio/ogg": "ogg",
+    "audio/mpeg": "mp3",
+    "application/pdf": "pdf",
+  };
+
+  if (map[mimeType]) {
+    return map[mimeType];
+  }
+
+  const slashIndex = mimeType.indexOf("/");
+  return slashIndex > -1 ? mimeType.substring(slashIndex + 1) : "bin";
+}
+
+const mediaStorageRules = loadMediaStorageRules();
+const mediaRootDir = ensureMediaDir();
+
+function banMediaStorageForChatId(chatId) {
+  const normalized = String(chatId || "").trim();
+  if (!normalized) {
+    return { ok: false, reason: "empty-id" };
+  }
+
+  if (!mediaStorageRules.skipMediaStorageChatIds.includes(normalized)) {
+    mediaStorageRules.skipMediaStorageChatIds.push(normalized);
+    saveMediaStorageRules(mediaStorageRules);
+    return { ok: true, added: true, id: normalized };
+  }
+
+  return { ok: true, added: false, id: normalized };
+}
+
+function shouldSkipMediaStorage(chatId, chatName) {
+  if (mediaStorageRules.skipMediaStorageChatIds.includes(chatId)) {
+    return true;
+  }
+
+  const normalizedName = String(chatName || "").toLocaleLowerCase("tr-TR");
+  return mediaStorageRules.skipMediaStorageNamePatterns.some((pattern) =>
+    normalizedName.includes(pattern.toLocaleLowerCase("tr-TR")),
+  );
+}
+
+async function saveIncomingMediaToStorage(message, chatId) {
+  const media = await message.downloadMedia();
+  if (!media?.data) {
+    return null;
+  }
+
+  const dateFolder = new Date().toISOString().slice(0, 10);
+  const dayDir = path.join(mediaRootDir, dateFolder);
+  if (!fs.existsSync(dayDir)) {
+    fs.mkdirSync(dayDir, { recursive: true });
+  }
+
+  const ext = getExtensionFromMime(media.mimetype);
+  const fileName = `${Date.now()}_${sanitizeFilePart(chatId)}.${ext}`;
+  const absolutePath = path.join(dayDir, fileName);
+  const relativePath = path.relative(path.resolve("."), absolutePath);
+
+  const buffer = Buffer.from(media.data, "base64");
+  fs.writeFileSync(absolutePath, buffer);
+
+  return {
+    absolutePath,
+    relativePath,
+    mimeType: media.mimetype,
+    fileSize: buffer.length,
+  };
+}
+
+function runDailyMediaCleanup() {
+  try {
+    const oldRows = getMediaFilesOlderThanOneWeek.all();
+    for (const row of oldRows) {
+      if (!row.file_path) continue;
+      const absolutePath = path.resolve(".", row.file_path);
+      if (fs.existsSync(absolutePath)) {
+        try {
+          fs.unlinkSync(absolutePath);
+        } catch (error) {
+          console.error(`Failed to delete media file ${absolutePath}:`, error.message);
+        }
+      }
+    }
+
+    const result = deleteMediaRecordsOlderThanOneWeek.run();
+    if (oldRows.length > 0 || result.changes > 0) {
+      console.log(`Daily media cleanup: removed ${result.changes} media DB row(s).`);
+    }
+  } catch (error) {
+    console.error("Daily media cleanup failed:", error.message);
+  }
+}
+
+function scheduleDailyMediaCleanupAtMidnight() {
+  const now = new Date();
+  const nextMidnight = new Date(now);
+  nextMidnight.setHours(24, 0, 0, 0);
+  const firstDelay = nextMidnight.getTime() - now.getTime();
+
+  setTimeout(() => {
+    runDailyMediaCleanup();
+    setInterval(runDailyMediaCleanup, 24 * 60 * 60 * 1000);
+  }, firstDelay);
 }
 
 function loadBotConfigs() {
@@ -345,6 +561,7 @@ function setupBotHandlers(runtime) {
     recordOutgoingMessage,
     resetChatState,
     resetAllChatStates,
+    banMediaStorageForChatId,
   });
 }
 
@@ -450,21 +667,26 @@ async function sendMediaToRuntime(
 ) {
   const chatId = runtime.config.chatId;
   let sentMessage = null;
+  const ext = getExtensionFromMime(mimeType);
+  const namedFile = {
+    source: mediaBuffer,
+    filename: `whatsapp-media.${ext}`,
+  };
 
   if (mimeType.startsWith("image/")) {
-    sentMessage = await runtime.bot.sendPhoto(chatId, mediaBuffer, {
+    sentMessage = await runtime.bot.sendPhoto(chatId, namedFile, {
       caption: caption.replace(/\\/g, ""),
     });
   } else if (mimeType.startsWith("video/")) {
-    sentMessage = await runtime.bot.sendVideo(chatId, mediaBuffer, {
+    sentMessage = await runtime.bot.sendVideo(chatId, namedFile, {
       caption: caption.replace(/\\/g, ""),
     });
   } else if (mimeType.startsWith("audio/")) {
-    sentMessage = await runtime.bot.sendAudio(chatId, mediaBuffer, {
+    sentMessage = await runtime.bot.sendAudio(chatId, namedFile, {
       caption: caption.replace(/\\/g, ""),
     });
   } else {
-    sentMessage = await runtime.bot.sendDocument(chatId, mediaBuffer, {
+    sentMessage = await runtime.bot.sendDocument(chatId, namedFile, {
       caption: caption.replace(/\\/g, ""),
     });
   }
@@ -606,8 +828,69 @@ whatsappClient.on("message", async (message) => {
     const chatName = chat?.name || contact?.pushname || contact?.name || chatId;
     const senderName = contact?.pushname || contact?.name || "Unknown";
 
+    let dbBody = message.body || "";
+    let dbType = message.type;
+
+    if (message.hasMedia) {
+      const skipStorage = shouldSkipMediaStorage(chatId, chatName);
+      dbBody = "[media]";
+
+      if (!skipStorage) {
+        try {
+          const saved = await saveIncomingMediaToStorage(message, chatId);
+          if (saved) {
+            dbBody = `[media] ${saved.relativePath}`;
+            insertMediaFile.run(
+              chatId,
+              senderName,
+              message.type,
+              saved.mimeType,
+              saved.relativePath,
+              saved.fileSize,
+              message.body || "",
+              1,
+            );
+          } else {
+            insertMediaFile.run(
+              chatId,
+              senderName,
+              message.type,
+              null,
+              null,
+              null,
+              message.body || "",
+              0,
+            );
+          }
+        } catch (error) {
+          console.error("Failed to save incoming media:", error.message);
+          insertMediaFile.run(
+            chatId,
+            senderName,
+            message.type,
+            null,
+            null,
+            null,
+            message.body || "",
+            0,
+          );
+        }
+      } else {
+        insertMediaFile.run(
+          chatId,
+          senderName,
+          message.type,
+          null,
+          null,
+          null,
+          message.body || "",
+          0,
+        );
+      }
+    }
+
     insertChat.run(chatId, chatName);
-    insertMessage.run(chatId, senderName, message.body || "", message.type);
+    insertMessage.run(chatId, senderName, dbBody, dbType);
 
     const caption = formatMessage(message, contact, chat);
     const whatsappChatId = message.from;
@@ -657,6 +940,8 @@ process.on("SIGINT", async () => {
 const botConfigs = loadBotConfigs();
 const emailBots = botConfigs.filter((c) => c.mode === "email");
 const whatsappBots = botConfigs.filter((c) => c.mode !== "email");
+
+scheduleDailyMediaCleanupAtMidnight();
 
 if (emailBots.length > 0 && whatsappBots.length === 0) {
   console.log("Only email bots found. Skipping WhatsApp initialization.");

@@ -1,3 +1,7 @@
+import pkg from "whatsapp-web.js";
+
+const { MessageMedia } = pkg;
+
 export function registerGeneralHandlers({
   runtime,
   whatsappClient,
@@ -10,6 +14,7 @@ export function registerGeneralHandlers({
   recordOutgoingMessage,
   resetChatState,
   resetAllChatStates,
+  banMediaStorageForChatId,
 }) {
   const telegramBot = runtime.bot;
   const authorizedChatId = runtime.config.chatId;
@@ -161,6 +166,73 @@ export function registerGeneralHandlers({
     return msg.chat.id.toString() === authorizedChatId;
   }
 
+  async function buildWhatsAppPayloadFromTelegram(msg) {
+    if (msg.photo?.length) {
+      const bestPhoto = msg.photo[msg.photo.length - 1];
+      const fileLink = await telegramBot.getFileLink(bestPhoto.file_id);
+      const response = await fetch(fileLink);
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      return {
+        payload: new MessageMedia("image/jpeg", base64, "telegram-photo.jpg"),
+        options: msg.caption ? { caption: msg.caption } : {},
+        recordText: msg.caption || "[photo]",
+      };
+    }
+
+    if (msg.document?.file_id) {
+      const fileLink = await telegramBot.getFileLink(msg.document.file_id);
+      const response = await fetch(fileLink);
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      return {
+        payload: new MessageMedia(
+          msg.document.mime_type || "application/octet-stream",
+          base64,
+          msg.document.file_name || "telegram-document",
+        ),
+        options: msg.caption ? { caption: msg.caption } : {},
+        recordText: msg.caption || `[document] ${msg.document.file_name || "file"}`,
+      };
+    }
+
+    if (msg.video?.file_id) {
+      const fileLink = await telegramBot.getFileLink(msg.video.file_id);
+      const response = await fetch(fileLink);
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      return {
+        payload: new MessageMedia("video/mp4", base64, "telegram-video.mp4"),
+        options: msg.caption ? { caption: msg.caption } : {},
+        recordText: msg.caption || "[video]",
+      };
+    }
+
+    if (msg.audio?.file_id || msg.voice?.file_id) {
+      const mediaFileId = msg.audio?.file_id || msg.voice?.file_id;
+      const fileLink = await telegramBot.getFileLink(mediaFileId);
+      const response = await fetch(fileLink);
+      const arrayBuffer = await response.arrayBuffer();
+      const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+      return {
+        payload: new MessageMedia("audio/ogg", base64, "telegram-audio.ogg"),
+        options: msg.caption ? { caption: msg.caption } : {},
+        recordText: msg.caption || "[audio]",
+      };
+    }
+
+    const text = (msg.text || "").trim();
+    return {
+      payload: text,
+      options: {},
+      recordText: text,
+    };
+  }
+
   telegramBot.onText(/\/start/, (msg) => {
     if (!isAuthorized(msg)) return;
 
@@ -176,6 +248,7 @@ Gecmis:
 • /chats - Kayitli sohbetler
 • /messages <isim> [sayi] - Mesaj gecmisi
 • /search <kelime> - Mesaj ara
+• /banmedia <id> - Bu sohbet icin medya kaydini kapat
 \nNot: Isimde bosluk varsa tirnak kullanabilirsin. Ornek: /send "Ali Veli" merhaba
     `;
 
@@ -364,6 +437,38 @@ Gecmis:
     });
   });
 
+  telegramBot.onText(/\/banmedia\s+(.+)/, async (msg, match) => {
+    if (!isAuthorized(msg)) return;
+
+    const rawId = (match?.[1] || "").trim();
+    if (!rawId) {
+      telegramBot.sendMessage(authorizedChatId, "Kullanim: /banmedia <id>");
+      return;
+    }
+
+    try {
+      const result = banMediaStorageForChatId(rawId);
+      if (!result.ok) {
+        telegramBot.sendMessage(authorizedChatId, "ID kaydedilemedi.");
+        return;
+      }
+
+      if (result.added) {
+        telegramBot.sendMessage(
+          authorizedChatId,
+          `Media kaydi kapatildi: ${result.id}`,
+        );
+      } else {
+        telegramBot.sendMessage(
+          authorizedChatId,
+          `Bu ID zaten media kayit disi: ${result.id}`,
+        );
+      }
+    } catch (error) {
+      telegramBot.sendMessage(authorizedChatId, `Hata: ${error.message}`);
+    }
+  });
+
   telegramBot.on("message", async (msg) => {
     if (!isAuthorized(msg)) return;
 
@@ -375,10 +480,23 @@ Gecmis:
 
       if (whatsappChatId) {
         try {
-          await whatsappClient.sendMessage(whatsappChatId, msg.text || "");
+          const outgoing = await buildWhatsAppPayloadFromTelegram(msg);
+          if (!outgoing.recordText) {
+            telegramBot.sendMessage(
+              authorizedChatId,
+              "Gonderilecek metin veya medya bulunamadi.",
+            );
+            return;
+          }
+
+          await whatsappClient.sendMessage(
+            whatsappChatId,
+            outgoing.payload,
+            outgoing.options,
+          );
           await recordOutgoingMessage(
             whatsappChatId,
-            msg.text || "",
+            outgoing.recordText,
             `Telegram (${runtime.config.name})`,
           );
           telegramBot.sendMessage(authorizedChatId, "OK", {

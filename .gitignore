@@ -5,3 +5,5 @@ bots/*.json
 !bots/example*
 messages.db
 message_history.json
+media/
+media-rules.json
