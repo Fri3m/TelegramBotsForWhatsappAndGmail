@@ -216,7 +216,9 @@ function loadBotConfigs() {
 
   if (duplicates.length > 0) {
     console.error("Duplicate Telegram bot token detected across configs.");
-    console.error("Each bot must use a different token when polling is enabled.");
+    console.error(
+      "Each bot must use a different token when polling is enabled.",
+    );
     for (const pair of duplicates) {
       console.error(`Token conflict: ${pair}`);
     }
