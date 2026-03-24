@@ -16,17 +16,15 @@ export function registerConnectionHandlers({
     if (!isAuthorized(msg)) return;
 
     const helpText = `
-*WhatsApp Connection Bot (${escapeMarkdown(runtime.config.name)})*
+WhatsApp Connection Bot (${runtime.config.name})
 
-*Devamli Mesaj:*
+Devamli Mesaj:
 • /connect [group|person] <isim> - Bir kisi veya gruba baglan
 • /disconnect - Connectiondan cik
 • /s <mesaj> - Connectiona mesaj gonder
     `;
 
-    telegramBot.sendMessage(authorizedChatId, helpText, {
-      parse_mode: "MarkdownV2",
-    });
+    telegramBot.sendMessage(authorizedChatId, helpText);
   });
 
   telegramBot.onText(/\/connect(?:\s+(.+))?$/, async (msg, match) => {

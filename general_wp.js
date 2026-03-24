@@ -165,23 +165,21 @@ export function registerGeneralHandlers({
     if (!isAuthorized(msg)) return;
 
     const helpText = `
-*WhatsApp General Bot (${escapeMarkdown(runtime.config.name)})*
+WhatsApp General Bot (${runtime.config.name})
 
-*Mesaj Gonderme:*
+Mesaj Gonderme:
 • Mesaja yanit ver -> O kisiye gider
 • /send <isim> <mesaj> - Mesaj gonder
 • /reply <mesaj> - Son kisiye yanit
 
-*Gecmis:*
+Gecmis:
 • /chats - Kayitli sohbetler
 • /messages <isim> [sayi] - Mesaj gecmisi
 • /search <kelime> - Mesaj ara
-\n_Not: Isimde bosluk varsa tirnak kullanabilirsin. Ornek: /send "Ali Veli" merhaba_
+\nNot: Isimde bosluk varsa tirnak kullanabilirsin. Ornek: /send "Ali Veli" merhaba
     `;
 
-    telegramBot.sendMessage(authorizedChatId, helpText, {
-      parse_mode: "MarkdownV2",
-    });
+    telegramBot.sendMessage(authorizedChatId, helpText);
   });
 
   telegramBot.onText(/\/send (.+)/, async (msg, match) => {

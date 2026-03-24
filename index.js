@@ -2,14 +2,11 @@ import pkg from "whatsapp-web.js";
 const { Client, LocalAuth } = pkg;
 import qrcode from "qrcode-terminal";
 import TelegramBot from "node-telegram-bot-api";
-import dotenv from "dotenv";
 import Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 import { registerGeneralHandlers } from "./general_wp.js";
 import { registerConnectionHandlers } from "./connection_wp.js";
-
-dotenv.config();
 
 function findChrome() {
   const isARM = process.arch === "arm64" || process.arch === "arm";
@@ -42,7 +39,7 @@ function findChrome() {
   return undefined;
 }
 
-const chromePath = process.env.CHROME_PATH || findChrome();
+const chromePath = findChrome();
 
 const db = new Database("./messages.db");
 
@@ -198,26 +195,31 @@ function loadBotConfigs() {
     }
   }
 
-  if (
-    configs.length === 0 &&
-    process.env.TELEGRAM_BOT_TOKEN &&
-    process.env.TELEGRAM_CHAT_ID
-  ) {
-    configs.push({
-      id: "default",
-      name: "default",
-      token: process.env.TELEGRAM_BOT_TOKEN,
-      chatId: String(process.env.TELEGRAM_CHAT_ID),
-      mode: "general",
-    });
-    console.log("No bots/*.json found. Using .env fallback for single bot.");
-  }
-
   if (configs.length === 0) {
     console.error("No Telegram bot config found.");
     console.error(
-      "Create bot files under bots/*.json (see bots/example.bot.json).",
+      "Create bot files under bots/*.json (see bots/example.bot.json). .env is not used.",
     );
+    process.exit(1);
+  }
+
+  const tokenOwners = new Map();
+  const duplicates = [];
+  for (const cfg of configs) {
+    const owner = tokenOwners.get(cfg.token);
+    if (owner) {
+      duplicates.push(`${owner} <-> ${cfg.name}`);
+    } else {
+      tokenOwners.set(cfg.token, cfg.name);
+    }
+  }
+
+  if (duplicates.length > 0) {
+    console.error("Duplicate Telegram bot token detected across configs.");
+    console.error("Each bot must use a different token when polling is enabled.");
+    for (const pair of duplicates) {
+      console.error(`Token conflict: ${pair}`);
+    }
     process.exit(1);
   }
 

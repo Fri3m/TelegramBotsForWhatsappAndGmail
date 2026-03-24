@@ -28,13 +28,7 @@ Forward your WhatsApp messages to one or more Telegram bots automatically.
 
 ### 3. Configure the App (Multi-Bot)
 
-1. Copy `.env.example` to `.env`:
-
-   ```bash
-   copy .env.example .env
-   ```
-
-2. Create one JSON file per bot under `bots/`.
+1. Create one JSON file per bot under `bots/`.
    For your use case, create two files: one `general`, one `connection`.
 
    Example: `bots/general.bot.json`
@@ -59,9 +53,7 @@ Forward your WhatsApp messages to one or more Telegram bots automatically.
    }
    ```
 
-3. `bots/example.bot.json` is only a template and is ignored at runtime.
-
-4. Optional fallback: If no `bots/*.json` exists, app uses `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from `.env` for single-bot mode.
+2. `bots/example.bot.json` is only a template and is ignored at runtime.
 
 ### 4. Install Dependencies
 
@@ -122,11 +114,7 @@ sudo dnf install https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noa
 sudo dnf install chromium -y
 ```
 
-Alternative: Set `CHROME_PATH` in `.env` if Chromium is installed elsewhere:
-
-```
-CHROME_PATH=/path/to/chromium
-```
+The app auto-detects Chromium path on ARM Linux.
 
 ## Troubleshooting
 
