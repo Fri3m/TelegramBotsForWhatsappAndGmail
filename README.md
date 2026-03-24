@@ -1,6 +1,6 @@
-# WhatsApp to Telegram Bridge
+# Telegram Bots for Whatsapp and Gmail
 
-Forward your WhatsApp messages to one or more Telegram bots automatically.
+Run Telegram bots for both WhatsApp and Gmail: forward WhatsApp messages and receive Gmail updates in Telegram from a single project.
 
 ## Features
 
