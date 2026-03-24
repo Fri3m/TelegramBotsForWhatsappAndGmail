@@ -252,15 +252,15 @@ Gecmis:
         return;
       }
 
-      let chatList = `Kayitli Sohbetler (${stats.total_messages} mesaj, ${stats.total_chats} sohbet)\n\n`;
+      let chatList = `Kayitli Sohbetler \\(${stats.total_messages} mesaj, ${stats.total_chats} sohbet\\)\n\n`;
 
       for (const chat of chats) {
         const name = escapeMarkdown(chat.name || "Bilinmeyen");
         const newIncomingCount = Number(chat.new_incoming_count || 0);
-        chatList += `• ${name} \(toplam: ${chat.message_count}, yeni: ${newIncomingCount}\)\n  \`${chat.id}\`\n\n`;
+        chatList += `• ${name} \\(${"toplam: " + chat.message_count + ", yeni: " + newIncomingCount}\\)\n  \`${chat.id}\`\n\n`;
       }
 
-      chatList += "Mesajlari gormek icin:\n/messages <isim> [sayi]";
+      chatList += "Mesajlari gormek icin:\n/messages <isim> \\[sayi\\]";
 
       telegramBot.sendMessage(authorizedChatId, chatList, {
         parse_mode: "MarkdownV2",
@@ -311,7 +311,7 @@ Gecmis:
       });
       const sender = escapeMarkdown(m.sender_name || "Bilinmeyen");
       const body = escapeMarkdown((m.body || `[${m.type}]`).substring(0, 100));
-      text += `[${escapeMarkdown(time)}] [${sender}] ${body}\n`;
+      text += `\\[${escapeMarkdown(time)}\\] \\[${sender}\\] ${body}\n`;
     }
 
     if (text.length > 4000) {
