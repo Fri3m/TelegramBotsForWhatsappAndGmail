@@ -260,7 +260,7 @@ Gecmis:
         chatList += `• ${name} \\(${"toplam: " + chat.message_count + ", yeni: " + newIncomingCount}\\)\n  \`${chat.id}\`\n\n`;
       }
 
-      chatList += "Mesajlari gormek icin:\n/messages <isim> \\[sayi\\]";
+      chatList += "Mesajlari gormek icin:\n/messages <isim\\> \\[sayi\\]";
 
       telegramBot.sendMessage(authorizedChatId, chatList, {
         parse_mode: "MarkdownV2",
