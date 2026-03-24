@@ -1,60 +1,58 @@
-import pkg from 'whatsapp-web.js';
+import pkg from "whatsapp-web.js";
 const { Client, LocalAuth } = pkg;
-import qrcode from 'qrcode-terminal';
-import TelegramBot from 'node-telegram-bot-api';
-import dotenv from 'dotenv';
-import Database from 'better-sqlite3';
-import fs from 'fs';
+import qrcode from "qrcode-terminal";
+import TelegramBot from "node-telegram-bot-api";
+import dotenv from "dotenv";
+import Database from "better-sqlite3";
+import fs from "fs";
+import path from "path";
+import { registerGeneralHandlers } from "./general_wp.js";
+import { registerConnectionHandlers } from "./connection_wp.js";
 
 dotenv.config();
 
-// Find Chrome/Chromium on the system (only needed for ARM Linux)
 function findChrome() {
-    // On Windows/x86 Linux, let Puppeteer use its bundled Chromium
-    const isARM = process.arch === 'arm64' || process.arch === 'arm';
-    const isLinux = process.platform === 'linux';
-    
-    // Only search for system browser on ARM Linux (Puppeteer doesn't have ARM binaries)
-    if (!isLinux || !isARM) {
-        return undefined;
-    }
-    
-    const paths = [
-        '/usr/bin/chromium-browser',
-        '/usr/bin/chromium',
-        '/usr/bin/google-chrome',
-        '/usr/bin/google-chrome-stable',
-        '/snap/bin/chromium',
-        '/usr/lib64/chromium-browser/chromium-browser',
-        '/usr/lib/chromium-browser/chromium-browser',
-    ];
-    
-    for (const p of paths) {
-        try {
-            if (fs.existsSync(p)) {
-                console.log(`🌐 Using system browser: ${p}`);
-                return p;
-            }
-        } catch (e) {}
-    }
-    
-    console.log('⚠️ No system browser found. Install chromium: sudo dnf install chromium');
+  const isARM = process.arch === "arm64" || process.arch === "arm";
+  const isLinux = process.platform === "linux";
+
+  if (!isLinux || !isARM) {
     return undefined;
+  }
+
+  const paths = [
+    "/usr/bin/chromium-browser",
+    "/usr/bin/chromium",
+    "/usr/bin/google-chrome",
+    "/usr/bin/google-chrome-stable",
+    "/snap/bin/chromium",
+    "/usr/lib64/chromium-browser/chromium-browser",
+    "/usr/lib/chromium-browser/chromium-browser",
+  ];
+
+  for (const p of paths) {
+    try {
+      if (fs.existsSync(p)) {
+        console.log(`Using system browser: ${p}`);
+        return p;
+      }
+    } catch (e) {}
+  }
+
+  console.log("No system browser found. Install chromium for ARM Linux.");
+  return undefined;
 }
 
 const chromePath = process.env.CHROME_PATH || findChrome();
 
-// Initialize SQLite database
-const db = new Database('./messages.db');
+const db = new Database("./messages.db");
 
-// Create tables
 db.exec(`
     CREATE TABLE IF NOT EXISTS chats (
         id TEXT PRIMARY KEY,
         name TEXT,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
-    
+
     CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_id TEXT NOT NULL,
@@ -64,13 +62,18 @@ db.exec(`
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (chat_id) REFERENCES chats(id)
     );
-    
+
     CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
     CREATE INDEX IF NOT EXISTS idx_messages_body ON messages(body);
+
+    CREATE TABLE IF NOT EXISTS chat_state (
+      chat_id TEXT PRIMARY KEY,
+      last_reset_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (chat_id) REFERENCES chats(id)
+    );
 `);
 
-// Prepared statements for better performance
 const insertChat = db.prepare(`
     INSERT OR REPLACE INTO chats (id, name, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
 `);
@@ -80,463 +83,485 @@ const insertMessage = db.prepare(`
 `);
 
 const getChats = db.prepare(`
-    SELECT c.id, c.name, COUNT(m.id) as message_count 
-    FROM chats c 
-    LEFT JOIN messages m ON c.id = m.chat_id 
-    GROUP BY c.id 
-    ORDER BY c.updated_at DESC 
+    SELECT
+      c.id,
+      c.name,
+      COUNT(m.id) as message_count,
+      COALESCE(
+        SUM(
+          CASE
+            WHEN m.type != 'outgoing' AND m.timestamp > COALESCE(s.last_reset_at, '1970-01-01 00:00:00')
+            THEN 1
+            ELSE 0
+          END
+        ),
+        0
+      ) as new_incoming_count
+    FROM chats c
+    LEFT JOIN messages m ON c.id = m.chat_id
+    LEFT JOIN chat_state s ON s.chat_id = c.id
+    GROUP BY c.id
+    ORDER BY c.updated_at DESC
     LIMIT 20
 `);
 
 const getMessages = db.prepare(`
-    SELECT sender_name, body, type, timestamp 
-    FROM messages 
-    WHERE chat_id = ? 
-    ORDER BY timestamp DESC 
+    SELECT sender_name, body, type, timestamp
+    FROM messages
+    WHERE chat_id = ?
+    ORDER BY timestamp DESC
     LIMIT ?
 `);
 
 const searchMessages = db.prepare(`
     SELECT c.name as chat_name, c.id as chat_id, m.body, m.timestamp, m.sender_name
-    FROM messages m 
-    JOIN chats c ON m.chat_id = c.id 
-    WHERE m.body LIKE ? 
-    ORDER BY m.timestamp DESC 
+    FROM messages m
+    JOIN chats c ON m.chat_id = c.id
+    WHERE m.body LIKE ?
+    ORDER BY m.timestamp DESC
     LIMIT 15
+`);
+
+const getChatByIdFromDb = db.prepare(`
+  SELECT name FROM chats WHERE id = ?
+`);
+
+const resetChatState = db.prepare(`
+  INSERT INTO chat_state (chat_id, last_reset_at)
+  VALUES (?, CURRENT_TIMESTAMP)
+  ON CONFLICT(chat_id) DO UPDATE SET last_reset_at = CURRENT_TIMESTAMP
+`);
+
+const resetAllChatStates = db.prepare(`
+  INSERT INTO chat_state (chat_id, last_reset_at)
+  SELECT id, CURRENT_TIMESTAMP FROM chats
+  ON CONFLICT(chat_id) DO UPDATE SET last_reset_at = excluded.last_reset_at
 `);
 
 const getChatStats = db.prepare(`
     SELECT COUNT(*) as total_messages, COUNT(DISTINCT chat_id) as total_chats FROM messages
 `);
 
-// Telegram configuration
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
-
-if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) {
-    console.error('❌ Error: Please set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env file');
-    console.log('📝 Copy .env.example to .env and fill in your credentials');
-    process.exit(1);
-}
-
-// Initialize Telegram bot with polling to receive commands
-const telegramBot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
-
-// Store last chat for quick replies
-let lastWhatsAppChat = null;
-
-// Store mapping of Telegram message ID -> WhatsApp chat ID for reply feature
-const messageMap = new Map();
-
-// Initialize WhatsApp client with local authentication (saves session)
-const whatsappClient = new Client({
-    authStrategy: new LocalAuth({
-        dataPath: './.wwebjs_auth'
-    }),
-    puppeteer: {
-        headless: true,
-        ...(chromePath && { executablePath: chromePath }),
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--disable-extensions'
-        ]
-    }
-});
-
-// Format message for Telegram
-function formatMessage(message, contact, chat) {
-    const senderName = contact?.pushname || contact?.name || message.from;
-    const chatName = chat?.name || 'Private Chat';
-    const isGroup = chat?.isGroup;
-    const chatId = message.from;
-    
-    let header = isGroup 
-        ? `📱 *WhatsApp Group:* ${escapeMarkdown(chatName)}\n👤 *From:* ${escapeMarkdown(senderName)}`
-        : `📱 *WhatsApp from:* ${escapeMarkdown(senderName)}`;
-    
-    // Add chat ID for replying
-    header += `\n🆔 \`${chatId}\``;
-    
-    return `${header}\n\n${escapeMarkdown(message.body)}`;
-}
-
-// Escape special characters for Telegram MarkdownV2
 function escapeMarkdown(text) {
-    if (!text) return '';
-    return text.replace(/[_*\[\]()~`>#+=|{}.!-]/g, '\\$&');
+  if (!text) return "";
+  return text.replace(/[_*\[\]()~`>#+=|{}.!-]/g, "\\$&");
 }
 
-// Send message to Telegram and store mapping for replies
-async function sendToTelegram(text, whatsappChatId = null, options = {}) {
-    try {
-        const sentMessage = await telegramBot.sendMessage(TELEGRAM_CHAT_ID, text, {
-            parse_mode: 'MarkdownV2',
-            ...options
-        });
-        
-        // Store mapping for reply feature
-        if (whatsappChatId && sentMessage.message_id) {
-            messageMap.set(sentMessage.message_id, whatsappChatId);
-            // Clean old entries (keep last 1000)
-            if (messageMap.size > 1000) {
-                const firstKey = messageMap.keys().next().value;
-                messageMap.delete(firstKey);
-            }
-        }
-        
-        console.log('✅ Message forwarded to Telegram');
-        return sentMessage;
-    } catch (error) {
-        console.error('❌ Error sending to Telegram:', error.message);
-        // Try without markdown if it fails
-        try {
-            const sentMessage = await telegramBot.sendMessage(TELEGRAM_CHAT_ID, text.replace(/\\/g, ''), {});
-            if (whatsappChatId && sentMessage.message_id) {
-                messageMap.set(sentMessage.message_id, whatsappChatId);
-            }
-            console.log('✅ Message forwarded to Telegram (plain text)');
-            return sentMessage;
-        } catch (e) {
-            console.error('❌ Failed to send even plain text:', e.message);
-            return null;
-        }
-    }
+function formatMessage(message, contact, chat) {
+  const senderName = contact?.pushname || contact?.name || message.from;
+  const chatName = chat?.name || "Private Chat";
+  const isGroup = chat?.isGroup;
+  const chatId = message.from;
+
+  let header = isGroup
+    ? `WhatsApp Group: ${escapeMarkdown(chatName)}\nFrom: ${escapeMarkdown(senderName)}`
+    : `WhatsApp from: ${escapeMarkdown(senderName)}`;
+
+  header += `\nID: \`${chatId}\``;
+
+  return `${header}\n\n${escapeMarkdown(message.body)}`;
 }
 
-// Send media to Telegram
-async function sendMediaToTelegram(message, caption, whatsappChatId = null) {
-    try {
-        const media = await message.downloadMedia();
-        if (!media) {
-            await sendToTelegram(caption + '\n\n_\\[Media could not be downloaded\\]_', whatsappChatId);
-            return;
-        }
-
-        const buffer = Buffer.from(media.data, 'base64');
-        const mimeType = media.mimetype;
-        let sentMessage = null;
-
-        if (mimeType.startsWith('image/')) {
-            sentMessage = await telegramBot.sendPhoto(TELEGRAM_CHAT_ID, buffer, { caption: caption.replace(/\\/g, '') });
-        } else if (mimeType.startsWith('video/')) {
-            sentMessage = await telegramBot.sendVideo(TELEGRAM_CHAT_ID, buffer, { caption: caption.replace(/\\/g, '') });
-        } else if (mimeType.startsWith('audio/')) {
-            sentMessage = await telegramBot.sendAudio(TELEGRAM_CHAT_ID, buffer, { caption: caption.replace(/\\/g, '') });
-        } else {
-            sentMessage = await telegramBot.sendDocument(TELEGRAM_CHAT_ID, buffer, { caption: caption.replace(/\\/g, '') });
-        }
-        
-        // Store mapping for reply feature
-        if (whatsappChatId && sentMessage && sentMessage.message_id) {
-            messageMap.set(sentMessage.message_id, whatsappChatId);
-        }
-        
-        console.log('✅ Media forwarded to Telegram');
-    } catch (error) {
-        console.error('❌ Error sending media to Telegram:', error.message);
-        await sendToTelegram(caption + '\n\n_\\[Media failed to send\\]_', whatsappChatId);
-    }
+function ensureBotConfigDir() {
+  const dir = path.resolve("./bots");
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
 }
 
-// WhatsApp Events
-whatsappClient.on('qr', (qr) => {
-    console.log('\n📲 Scan this QR code with WhatsApp to login:\n');
-    qrcode.generate(qr, { small: true });
-});
+function loadBotConfigs() {
+  const botDir = ensureBotConfigDir();
+  const files = fs
+    .readdirSync(botDir)
+    .filter((f) => f.endsWith(".json") && f !== "example.bot.json");
 
-whatsappClient.on('loading_screen', (percent, message) => {
-    console.log(`⏳ Loading: ${percent}% - ${message}`);
-});
+  const configs = [];
 
-whatsappClient.on('authenticated', () => {
-    console.log('🔐 WhatsApp authenticated');
-});
-
-whatsappClient.on('auth_failure', (msg) => {
-    console.error('❌ Authentication failed:', msg);
-});
-
-whatsappClient.on('ready', async () => {
-    console.log('\n✅ WhatsApp Web is ready!');
-    console.log('📨 Messages will now be forwarded to Telegram\n');
-    
-    // Send startup notification to Telegram
-    await sendToTelegram('🟢 *WhatsApp to Telegram Bridge is now active\\!*');
-});
-
-whatsappClient.on('disconnected', (reason) => {
-    console.log('❌ WhatsApp disconnected:', reason);
-});
-
-// Main message handler
-whatsappClient.on('message', async (message) => {
+  for (const file of files) {
+    const fullPath = path.join(botDir, file);
     try {
-        // Skip status updates and broadcast messages
-        if (message.isStatus || message.from === 'status@broadcast') {
-            return;
-        }
+      const raw = fs.readFileSync(fullPath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (!parsed.token || !parsed.chatId) {
+        console.log(`Skipping ${file}: token or chatId missing`);
+        continue;
+      }
 
-        const contact = await message.getContact();
-        const chat = await message.getChat();
-        
-        // Store last chat for quick replies
-        lastWhatsAppChat = message.from;
-        
-        // Save to SQLite
-        const chatId = message.from;
-        const chatName = chat?.name || contact?.pushname || contact?.name || chatId;
-        const senderName = contact?.pushname || contact?.name || 'Unknown';
-        
-        insertChat.run(chatId, chatName);
-        insertMessage.run(chatId, senderName, message.body || '', message.type);
-        
-        console.log(`📩 New message from ${senderName}`);
-
-        // Format the caption/header
-        const caption = formatMessage(message, contact, chat);
-
-        // Handle different message types
-        const whatsappChatId = message.from;
-        
-        if (message.hasMedia) {
-            await sendMediaToTelegram(message, caption, whatsappChatId);
-        } else if (message.type === 'chat') {
-            await sendToTelegram(caption, whatsappChatId);
-        } else if (message.type === 'location') {
-            const locationText = caption + `\n\n📍 Location: ${message.location.latitude}, ${message.location.longitude}`;
-            await sendToTelegram(locationText, whatsappChatId);
-        } else if (message.type === 'vcard' || message.type === 'multi_vcard') {
-            await sendToTelegram(caption + '\n\n_\\[Contact card received\\]_', whatsappChatId);
-        } else {
-            await sendToTelegram(caption + `\n\n_\\[${message.type} message\\]_`, whatsappChatId);
-        }
-
+      configs.push({
+        id: path.basename(file, ".json"),
+        name: parsed.name || path.basename(file, ".json"),
+        token: String(parsed.token).trim(),
+        chatId: String(parsed.chatId).trim(),
+        mode: parsed.mode === "connection" ? "connection" : "general",
+      });
     } catch (error) {
-        console.error('❌ Error processing message:', error.message);
+      console.error(`Failed to load ${file}:`, error.message);
     }
-});
+  }
 
-// Handle group notifications (joins, leaves, etc.)
-whatsappClient.on('group_join', async (notification) => {
-    const chat = await notification.getChat();
-    await sendToTelegram(`👋 Someone joined group: *${escapeMarkdown(chat.name)}*`);
-});
+  if (
+    configs.length === 0 &&
+    process.env.TELEGRAM_BOT_TOKEN &&
+    process.env.TELEGRAM_CHAT_ID
+  ) {
+    configs.push({
+      id: "default",
+      name: "default",
+      token: process.env.TELEGRAM_BOT_TOKEN,
+      chatId: String(process.env.TELEGRAM_CHAT_ID),
+      mode: "general",
+    });
+    console.log("No bots/*.json found. Using .env fallback for single bot.");
+  }
 
-// Graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('\n🛑 Shutting down...');
-    await sendToTelegram('🔴 *WhatsApp to Telegram Bridge is shutting down*');
-    telegramBot.stopPolling();
-    await whatsappClient.destroy();
-    process.exit(0);
-});
+  if (configs.length === 0) {
+    console.error("No Telegram bot config found.");
+    console.error(
+      "Create bot files under bots/*.json (see bots/example.bot.json).",
+    );
+    process.exit(1);
+  }
 
-// ==================== TELEGRAM COMMANDS ====================
+  return configs;
+}
 
-// /start command - show help
-telegramBot.onText(/\/start/, (msg) => {
-    if (msg.chat.id.toString() !== TELEGRAM_CHAT_ID) return;
-    
-    const helpText = `
-🤖 *WhatsApp ↔ Telegram Bridge*
+const botRuntimes = [];
 
-*Mesaj Gönderme:*
-• Mesaja yanıt ver \\→ O kişiye gider
-• /send \\<id\\> \\<mesaj\\> \\- Mesaj gönder
-• /reply \\<mesaj\\> \\- Son kişiye yanıt
+function createRuntime(config) {
+  return {
+    config,
+    bot: new TelegramBot(config.token, { polling: true }),
+    lastWhatsAppChat: null,
+    activeConnection: null,
+    messageMap: new Map(),
+  };
+}
 
-*Geçmiş:*
-• /chats \\- Kayıtlı sohbetler
-• /messages \\<id\\> \\[sayı\\] \\- Mesaj geçmişi
-• /search \\<kelime\\> \\- Mesaj ara
+function setupBotHandlers(runtime) {
+  if (runtime.config.mode === "connection") {
+    registerConnectionHandlers({
+      runtime,
+      whatsappClient,
+      resolveChatConnection,
+      escapeMarkdown,
+      recordOutgoingMessage,
+    });
+    return;
+  }
 
-*Örnek:*
-\`/messages 905551234567@c.us\`
-\`/messages 905551234567@c.us 50\`
-\`/search merhaba\`
-    `;
-    telegramBot.sendMessage(TELEGRAM_CHAT_ID, helpText, { parse_mode: 'MarkdownV2' });
-});
+  registerGeneralHandlers({
+    runtime,
+    whatsappClient,
+    db,
+    getChats,
+    getChatStats,
+    getMessages,
+    searchMessages,
+    escapeMarkdown,
+    recordOutgoingMessage,
+    resetChatState,
+    resetAllChatStates,
+  });
+}
 
-// /send command - send message to specific WhatsApp number
-telegramBot.onText(/\/send (.+)/, async (msg, match) => {
-    if (msg.chat.id.toString() !== TELEGRAM_CHAT_ID) return;
-    
-    const input = match[1];
-    const parts = input.split(' ');
-    const whatsappId = parts[0];
-    const message = parts.slice(1).join(' ');
-    
-    if (!whatsappId || !message) {
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, '❌ Kullanım: /send <numara@c.us> <mesaj>');
-        return;
+async function recordOutgoingMessage(
+  chatId,
+  body,
+  senderName = "Telegram User",
+) {
+  if (!chatId || body == null) {
+    return;
+  }
+
+  const text = String(body).trim();
+  if (!text) {
+    return;
+  }
+
+  let chatName = chatId;
+  try {
+    const chat = await whatsappClient.getChatById(chatId);
+    chatName = chat?.name || chatId;
+  } catch (error) {
+    const existing = getChatByIdFromDb.get(chatId);
+    chatName = existing?.name || chatId;
+  }
+
+  insertChat.run(chatId, chatName);
+  insertMessage.run(chatId, senderName, text, "outgoing");
+  resetChatState.run(chatId);
+}
+
+async function sendToRuntime(
+  runtime,
+  text,
+  whatsappChatId = null,
+  options = {},
+) {
+  const chatId = runtime.config.chatId;
+  try {
+    const sentMessage = await runtime.bot.sendMessage(chatId, text, {
+      parse_mode: "MarkdownV2",
+      ...options,
+    });
+
+    if (whatsappChatId && sentMessage.message_id) {
+      runtime.messageMap.set(sentMessage.message_id, whatsappChatId);
+      if (runtime.messageMap.size > 1000) {
+        const firstKey = runtime.messageMap.keys().next().value;
+        runtime.messageMap.delete(firstKey);
+      }
     }
-    
+
+    return sentMessage;
+  } catch (error) {
     try {
-        await whatsappClient.sendMessage(whatsappId, message);
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, `✅ Mesaj gönderildi: ${whatsappId}`);
-        console.log(`📤 Message sent to ${whatsappId}`);
-    } catch (error) {
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, `❌ Hata: ${error.message}`);
-        console.error('Error sending message:', error);
+      const sentMessage = await runtime.bot.sendMessage(
+        chatId,
+        text.replace(/\\/g, ""),
+        {},
+      );
+      if (whatsappChatId && sentMessage.message_id) {
+        runtime.messageMap.set(sentMessage.message_id, whatsappChatId);
+      }
+      return sentMessage;
+    } catch (e) {
+      console.error(`Send failed for bot ${runtime.config.name}:`, e.message);
+      return null;
     }
+  }
+}
+
+async function sendToAllBots(text, whatsappChatId = null, options = {}) {
+  await Promise.all(
+    botRuntimes.map((runtime) =>
+      sendToRuntime(runtime, text, whatsappChatId, options),
+    ),
+  );
+}
+
+async function sendMediaToRuntime(
+  runtime,
+  mediaBuffer,
+  mimeType,
+  caption,
+  whatsappChatId = null,
+) {
+  const chatId = runtime.config.chatId;
+  let sentMessage = null;
+
+  if (mimeType.startsWith("image/")) {
+    sentMessage = await runtime.bot.sendPhoto(chatId, mediaBuffer, {
+      caption: caption.replace(/\\/g, ""),
+    });
+  } else if (mimeType.startsWith("video/")) {
+    sentMessage = await runtime.bot.sendVideo(chatId, mediaBuffer, {
+      caption: caption.replace(/\\/g, ""),
+    });
+  } else if (mimeType.startsWith("audio/")) {
+    sentMessage = await runtime.bot.sendAudio(chatId, mediaBuffer, {
+      caption: caption.replace(/\\/g, ""),
+    });
+  } else {
+    sentMessage = await runtime.bot.sendDocument(chatId, mediaBuffer, {
+      caption: caption.replace(/\\/g, ""),
+    });
+  }
+
+  if (whatsappChatId && sentMessage && sentMessage.message_id) {
+    runtime.messageMap.set(sentMessage.message_id, whatsappChatId);
+  }
+}
+
+async function sendMediaToAllBots(message, caption, whatsappChatId = null) {
+  try {
+    const media = await message.downloadMedia();
+    if (!media) {
+      await sendToAllBots(
+        caption + "\n\n_[Media could not be downloaded]_",
+        whatsappChatId,
+      );
+      return;
+    }
+
+    const buffer = Buffer.from(media.data, "base64");
+    const mimeType = media.mimetype;
+
+    for (const runtime of botRuntimes) {
+      try {
+        await sendMediaToRuntime(
+          runtime,
+          buffer,
+          mimeType,
+          caption,
+          whatsappChatId,
+        );
+      } catch (error) {
+        await sendToRuntime(
+          runtime,
+          caption + "\n\n_[Media failed to send]_",
+          whatsappChatId,
+        );
+      }
+    }
+  } catch (error) {
+    console.error("Media processing failed:", error.message);
+  }
+}
+
+async function resolveChatConnection(targetType, query) {
+  const normalizedQuery = (query || "").trim().toLowerCase();
+  const wantsGroup = targetType === "group";
+
+  if (!normalizedQuery) {
+    return null;
+  }
+
+  const chats = await whatsappClient.getChats();
+  const filtered = chats.filter((c) => (wantsGroup ? c.isGroup : !c.isGroup));
+
+  const exact = filtered.find((c) => {
+    const chatName = (c.name || "").trim().toLowerCase();
+    return chatName === normalizedQuery || c.id?._serialized === query;
+  });
+
+  if (exact) return exact;
+
+  return filtered.find((c) => {
+    const chatName = (c.name || "").trim().toLowerCase();
+    return chatName.includes(normalizedQuery);
+  });
+}
+
+const whatsappClient = new Client({
+  authStrategy: new LocalAuth({
+    dataPath: "./.wwebjs_auth",
+  }),
+  puppeteer: {
+    headless: true,
+    ...(chromePath && { executablePath: chromePath }),
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-accelerated-2d-canvas",
+      "--no-first-run",
+      "--no-zygote",
+      "--disable-gpu",
+      "--disable-extensions",
+    ],
+  },
 });
 
-// /reply command - reply to last person who messaged
-telegramBot.onText(/\/reply (.+)/, async (msg, match) => {
-    if (msg.chat.id.toString() !== TELEGRAM_CHAT_ID) return;
-    
-    const message = match[1];
-    
-    if (!lastWhatsAppChat) {
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, '❌ Henüz yanıtlanacak mesaj yok');
-        return;
-    }
-    
-    try {
-        await whatsappClient.sendMessage(lastWhatsAppChat, message);
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, `✅ Yanıt gönderildi: ${lastWhatsAppChat}`);
-        console.log(`📤 Reply sent to ${lastWhatsAppChat}`);
-    } catch (error) {
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, `❌ Hata: ${error.message}`);
-        console.error('Error sending reply:', error);
-    }
+whatsappClient.on("qr", (qr) => {
+  console.log("\nScan this QR code with WhatsApp to login:\n");
+  qrcode.generate(qr, { small: true });
 });
 
-// /chats command - list chats with message counts
-telegramBot.onText(/\/chats/, async (msg) => {
-    if (msg.chat.id.toString() !== TELEGRAM_CHAT_ID) return;
-    
-    try {
-        const chats = getChats.all();
-        const stats = getChatStats.get();
-        
-        if (chats.length === 0) {
-            telegramBot.sendMessage(TELEGRAM_CHAT_ID, '📭 Henüz kayıtlı mesaj yok.');
-            return;
-        }
-        
-        let chatList = `📋 *Kayıtlı Sohbetler* \\(${stats.total_messages} mesaj, ${stats.total_chats} sohbet\\)\n\n`;
-        
-        for (const chat of chats) {
-            const name = escapeMarkdown(chat.name || 'Bilinmeyen');
-            chatList += `• ${name} \\(${chat.message_count}\\)\n  \`${chat.id}\`\n\n`;
-        }
-        
-        chatList += '_Mesajları görmek için:_\n`/messages <chat\\_id> [sayı]`';
-        
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, chatList, { parse_mode: 'MarkdownV2' });
-    } catch (error) {
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, `❌ Hata: ${error.message}`);
-    }
+whatsappClient.on("loading_screen", (percent, message) => {
+  console.log(`Loading: ${percent}% - ${message}`);
 });
 
-// /messages command - get messages from a specific chat (with optional count)
-telegramBot.onText(/\/messages (\S+)\s*(\d*)/, async (msg, match) => {
-    if (msg.chat.id.toString() !== TELEGRAM_CHAT_ID) return;
-    
-    const chatId = match[1].trim();
-    const count = parseInt(match[2]) || 20; // Default 20, user can specify
-    const limitedCount = Math.min(count, 100); // Max 100
-    
-    const messages = getMessages.all(chatId, limitedCount);
-    
-    if (messages.length === 0) {
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, '❌ Bu sohbette kayıtlı mesaj yok.\n/chats ile sohbetleri listeleyin.');
-        return;
-    }
-    
-    // Get chat name
-    const chatInfo = db.prepare('SELECT name FROM chats WHERE id = ?').get(chatId);
-    const name = chatInfo?.name || chatId;
-    
-    let text = `📱 *${escapeMarkdown(name)}* \\- Son ${messages.length} mesaj:\n\n`;
-    
-    // Reverse to show oldest first
-    for (const m of messages.reverse()) {
-        const time = new Date(m.timestamp).toLocaleString('tr-TR', { 
-            day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' 
-        });
-        const body = escapeMarkdown((m.body || `[${m.type}]`).substring(0, 100));
-        text += `\\[${escapeMarkdown(time)}\\] ${body}\n`;
-    }
-    
-    // Split if too long
-    if (text.length > 4000) {
-        text = text.substring(0, 4000) + '\n\\.\\.\\._\\(kısaltıldı\\)_';
-    }
-    
-    telegramBot.sendMessage(TELEGRAM_CHAT_ID, text, { parse_mode: 'MarkdownV2' });
+whatsappClient.on("authenticated", () => {
+  console.log("WhatsApp authenticated");
 });
 
-// /search command - search messages
-telegramBot.onText(/\/search (.+)/, async (msg, match) => {
-    if (msg.chat.id.toString() !== TELEGRAM_CHAT_ID) return;
-    
-    const query = match[1].trim();
-    const results = searchMessages.all(`%${query}%`);
-    
-    if (results.length === 0) {
-        telegramBot.sendMessage(TELEGRAM_CHAT_ID, `🔍 "${query}" için sonuç bulunamadı.`);
-        return;
-    }
-    
-    let text = `🔍 *"${escapeMarkdown(query)}"* için ${results.length} sonuç:\n\n`;
-    
-    for (const r of results) {
-        const time = new Date(r.timestamp).toLocaleString('tr-TR', { 
-            day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' 
-        });
-        text += `*${escapeMarkdown(r.chat_name || 'Bilinmeyen')}*\n`;
-        text += `${escapeMarkdown((r.body || '').substring(0, 80))}\n`;
-        text += `_${escapeMarkdown(time)}_\n\n`;
-    }
-    
-    if (text.length > 4000) {
-        text = text.substring(0, 4000) + '\n\\.\\.\\._\\(kısaltıldı\\)_';
-    }
-    
-    telegramBot.sendMessage(TELEGRAM_CHAT_ID, text, { parse_mode: 'MarkdownV2' });
+whatsappClient.on("auth_failure", (msg) => {
+  console.error("Authentication failed:", msg);
 });
 
-// Handle replies to bot messages - send to WhatsApp
-telegramBot.on('message', async (msg) => {
-    // Only process from authorized chat
-    if (msg.chat.id.toString() !== TELEGRAM_CHAT_ID) return;
-    
-    // Skip commands
-    if (msg.text && msg.text.startsWith('/')) return;
-    
-    // Check if this is a reply to a bot message
-    if (msg.reply_to_message) {
-        const replyToId = msg.reply_to_message.message_id;
-        const whatsappChatId = messageMap.get(replyToId);
-        
-        if (whatsappChatId) {
-            try {
-                await whatsappClient.sendMessage(whatsappChatId, msg.text);
-                console.log(`📤 Reply sent to ${whatsappChatId}`);
-                // React with checkmark to confirm
-                telegramBot.sendMessage(TELEGRAM_CHAT_ID, '✅', { 
-                    reply_to_message_id: msg.message_id 
-                });
-            } catch (error) {
-                telegramBot.sendMessage(TELEGRAM_CHAT_ID, `❌ Gönderilemedi: ${error.message}`);
-                console.error('Error sending reply:', error);
-            }
-        } else {
-            telegramBot.sendMessage(TELEGRAM_CHAT_ID, '❌ Bu mesajın WhatsApp kaynağı bulunamadı. /reply veya /send kullanın.');
-        }
-    }
+whatsappClient.on("ready", async () => {
+  console.log("\nWhatsApp Web is ready!");
+  console.log(
+    "Messages will now be forwarded to all configured Telegram bots\n",
+  );
+  await sendToAllBots("*WhatsApp to Telegram Bridge is now active*", null, {
+    parse_mode: "MarkdownV2",
+  });
 });
 
-// Start the WhatsApp client
-console.log('🚀 Starting WhatsApp to Telegram Bridge...');
-console.log('📝 Make sure you have set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env file\n');
+whatsappClient.on("disconnected", (reason) => {
+  console.log("WhatsApp disconnected:", reason);
+});
+
+whatsappClient.on("message", async (message) => {
+  try {
+    if (message.isStatus || message.from === "status@broadcast") {
+      return;
+    }
+
+    const contact = await message.getContact();
+    const chat = await message.getChat();
+
+    for (const runtime of botRuntimes) {
+      runtime.lastWhatsAppChat = message.from;
+    }
+
+    const chatId = message.from;
+    const chatName = chat?.name || contact?.pushname || contact?.name || chatId;
+    const senderName = contact?.pushname || contact?.name || "Unknown";
+
+    insertChat.run(chatId, chatName);
+    insertMessage.run(chatId, senderName, message.body || "", message.type);
+
+    const caption = formatMessage(message, contact, chat);
+    const whatsappChatId = message.from;
+
+    if (message.hasMedia) {
+      await sendMediaToAllBots(message, caption, whatsappChatId);
+    } else if (message.type === "chat") {
+      await sendToAllBots(caption, whatsappChatId);
+    } else if (message.type === "location") {
+      const locationText =
+        caption +
+        `\n\nLocation: ${message.location.latitude}, ${message.location.longitude}`;
+      await sendToAllBots(locationText, whatsappChatId);
+    } else if (message.type === "vcard" || message.type === "multi_vcard") {
+      await sendToAllBots(
+        caption + "\n\n_[Contact card received]_",
+        whatsappChatId,
+      );
+    } else {
+      await sendToAllBots(
+        caption + `\n\n_[${message.type} message]_`,
+        whatsappChatId,
+      );
+    }
+  } catch (error) {
+    console.error("Error processing message:", error.message);
+  }
+});
+
+whatsappClient.on("group_join", async (notification) => {
+  const chat = await notification.getChat();
+  await sendToAllBots(`Someone joined group: *${escapeMarkdown(chat.name)}*`);
+});
+
+process.on("SIGINT", async () => {
+  console.log("\nShutting down...");
+  await sendToAllBots("*WhatsApp to Telegram Bridge is shutting down*");
+
+  for (const runtime of botRuntimes) {
+    runtime.bot.stopPolling();
+  }
+
+  await whatsappClient.destroy();
+  process.exit(0);
+});
+
+const botConfigs = loadBotConfigs();
+for (const config of botConfigs) {
+  const runtime = createRuntime(config);
+  botRuntimes.push(runtime);
+  setupBotHandlers(runtime);
+}
+
+console.log(`Starting bridge with ${botRuntimes.length} Telegram bot(s)...`);
+for (const runtime of botRuntimes) {
+  console.log(
+    `- ${runtime.config.name} [${runtime.config.mode}] (chatId: ${runtime.config.chatId})`,
+  );
+}
+
 whatsappClient.initialize();

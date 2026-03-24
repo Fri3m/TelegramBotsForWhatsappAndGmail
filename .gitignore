@@ -2,5 +2,7 @@ node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
 .env
+bots/*.json
+!bots/example.bot.json
 messages.db
 message_history.json
