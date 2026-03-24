@@ -6,6 +6,7 @@ Forward your WhatsApp messages to one or more Telegram bots automatically.
 
 - 📱 Forwards all WhatsApp messages to Telegram
 - 🤖 Supports multiple Telegram bots at the same time
+- 📧 Supports dedicated email mode bot (single or multiple Gmail accounts)
 - 🖼️ Supports images, videos, audio, and documents
 - 👥 Works with both private chats and groups
 - 📍 Forwards location messages
@@ -29,7 +30,7 @@ Forward your WhatsApp messages to one or more Telegram bots automatically.
 ### 3. Configure the App (Multi-Bot)
 
 1. Create one JSON file per bot under `bots/`.
-   For your use case, create two files: one `general`, one `connection`.
+  You can create `general`, `connection`, and `email` mode bots.
 
    Example: `bots/general.bot.json`
 
@@ -53,7 +54,25 @@ Forward your WhatsApp messages to one or more Telegram bots automatically.
    }
    ```
 
-2. `bots/example.bot.json` is only a template and is ignored at runtime.
+   Example: `bots/email-bot.json`
+
+   ```json
+   {
+     "name": "email-bot",
+     "mode": "email",
+     "token": "111222333:EMAILTOKEN",
+     "chatId": "123456789",
+     "email_accounts": [
+       {
+         "name": "email1",
+         "email": "your-email@gmail.com",
+         "password": "gmail-app-password"
+       }
+     ]
+   }
+   ```
+
+2. `bots/example.*.json` files are templates and are ignored at runtime.
 
 ### 4. Install Dependencies
 
@@ -83,7 +102,16 @@ Once connected, all incoming WhatsApp messages are forwarded to every configured
 Command split by bot mode:
 
 - `general` bot: reply, `/send <isim> <mesaj>`, `/reply <mesaj>`, `/chats`, `/messages <isim> [sayi]`, `/search <kelime>`
-- `connection` bot: `/connect`, `/disconnect`, `/s`
+- `connection` bot: `/connect`, `/disconnect`, `/s` (or direct message after connect)
+- `email` bot: `/emails [hesap_adi] [sayi]`, `/email [hesap_adi] [sayi]`, `/search <kelime>`
+
+Notes for email mode:
+
+- Email mode bot does not receive WhatsApp forwards.
+- `/emails` returns latest mails; the newest appears at the bottom.
+- Auto-check notifies only mails that arrived since the last check.
+
+Detailed email setup: see `EMAIL_SETUP.md`.
 
 Press `Ctrl+C` to stop the app gracefully.
 
@@ -128,6 +156,11 @@ The app auto-detects Chromium path on ARM Linux.
 - Check your `bots/*.json` files have correct `token` and `chatId`
 - Make sure you've started a chat with your bot first
 - Verify your Chat ID is correct
+
+**Email bot account config error:**
+
+- Ensure `mode` is `email`
+- Add either `email_accounts` (recommended) or `gmail_email` + `gmail_password`
 
 **Puppeteer errors:**
 

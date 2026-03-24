@@ -68,8 +68,19 @@ Email bot aşağıdaki komutlara sahiptir:
 
 ```
 /start - Yardım ve komut listesi göster
-/emails - Son mailleri göster (max 10)
+/emails [hesap_adi] [sayi] - Son mailleri getir
+/email [hesap_adi] [sayi] - /emails alias komutu
 /search <kelime> - Maillerde arama yap
+```
+
+Ornekler:
+
+```
+/emails
+/emails 20
+/emails email1
+/emails email1 10
+/email email1
 ```
 
 ### Otomatik Check

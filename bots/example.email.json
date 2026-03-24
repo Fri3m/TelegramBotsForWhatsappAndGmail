@@ -1,0 +1,18 @@
+{
+  "name": "Email Bot",
+  "mode": "email",
+  "token": "YOUR_TELEGRAM_BOT_TOKEN_HERE",
+  "chatId": "YOUR_TELEGRAM_CHAT_ID_HERE",
+  "email_accounts": [
+    {
+      "name": "Personal",
+      "email": "your-email@gmail.com",
+      "password": "app-password-16-chars"
+    },
+    {
+      "name": "Work",
+      "email": "your-work@gmail.com",
+      "password": "work-app-password-16-chars"
+    }
+  ]
+}

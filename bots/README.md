@@ -24,15 +24,40 @@ Connection bot example:
 }
 ```
 
+Email bot example:
+
+```json
+{
+  "name": "email-bot",
+  "mode": "email",
+  "token": "111222333:EMAILTOKEN",
+  "chatId": "123456789",
+  "email_accounts": [
+    {
+      "name": "email1",
+      "email": "your-email@gmail.com",
+      "password": "gmail-app-password"
+    },
+    {
+      "name": "email2",
+      "email": "your-second@gmail.com",
+      "password": "gmail-app-password-2"
+    }
+  ]
+}
+```
+
 Notes:
 
 - `name`: Friendly label for logs.
-- `mode`: `general` or `connection`.
+- `mode`: `general`, `connection`, or `email`.
 - `token`: Bot token from @BotFather.
 - `chatId`: Telegram chat ID to receive forwarded messages.
-- Any `*.json` file in this folder is loaded (except `example.bot.json`).
+- For email mode, set `email_accounts` (recommended) or `gmail_email` + `gmail_password`.
+- Any `*.json` file in this folder is loaded except `example.*.json` templates.
 
 Mode command split:
 
 - `general`: reply, /send, /reply, /chats, /messages, /search
 - `connection`: /connect, /disconnect, /s
+- `email`: /emails [hesap_adi] [sayi], /email [hesap_adi] [sayi], /search
