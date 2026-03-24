@@ -7,6 +7,7 @@ import fs from "fs";
 import path from "path";
 import { registerGeneralHandlers } from "./general_wp.js";
 import { registerConnectionHandlers } from "./connection_wp.js";
+import { registerEmailHandlers } from "./email_wp.js";
 
 function findChrome() {
   const isARM = process.arch === "arm64" || process.arch === "arm";
@@ -183,12 +184,19 @@ function loadBotConfigs() {
         continue;
       }
 
+      const mode =
+        parsed.mode === "connection"
+          ? "connection"
+          : parsed.mode === "email"
+            ? "email"
+            : "general";
+
       configs.push({
         id: path.basename(file, ".json"),
         name: parsed.name || path.basename(file, ".json"),
         token: String(parsed.token).trim(),
         chatId: String(parsed.chatId).trim(),
-        mode: parsed.mode === "connection" ? "connection" : "general",
+        mode,
       });
     } catch (error) {
       console.error(`Failed to load ${file}:`, error.message);
@@ -231,16 +239,41 @@ function loadBotConfigs() {
 const botRuntimes = [];
 
 function createRuntime(config) {
-  return {
+  const runtime = {
     config,
     bot: new TelegramBot(config.token, { polling: true }),
     lastWhatsAppChat: null,
     activeConnection: null,
     messageMap: new Map(),
   };
+
+  if (config.mode === "email") {
+    runtime.emailConfig = {
+      email: config.gmail_email || "",
+      password: config.gmail_password || "",
+    };
+  }
+
+  return runtime;
 }
 
 function setupBotHandlers(runtime) {
+  if (runtime.config.mode === "email") {
+    if (!runtime.emailConfig?.email || !runtime.emailConfig?.password) {
+      console.error(
+        `Email bot ${runtime.config.name} requires gmail_email and gmail_password in config`,
+      );
+      return;
+    }
+    registerEmailHandlers({
+      runtime,
+      telegramBot: runtime.bot,
+      db,
+      escapeMarkdown,
+    });
+    return;
+  }
+
   if (runtime.config.mode === "connection") {
     registerConnectionHandlers({
       runtime,
@@ -569,6 +602,15 @@ process.on("SIGINT", async () => {
 });
 
 const botConfigs = loadBotConfigs();
+const emailBots = botConfigs.filter((c) => c.mode === "email");
+const whatsappBots = botConfigs.filter((c) => c.mode !== "email");
+
+if (emailBots.length > 0 && whatsappBots.length === 0) {
+  console.log("Only email bots found. Skipping WhatsApp initialization.");
+} else if (whatsappBots.length === 0) {
+  console.log("No WhatsApp bots found.");
+}
+
 for (const config of botConfigs) {
   const runtime = createRuntime(config);
   botRuntimes.push(runtime);
@@ -577,9 +619,17 @@ for (const config of botConfigs) {
 
 console.log(`Starting bridge with ${botRuntimes.length} Telegram bot(s)...`);
 for (const runtime of botRuntimes) {
-  console.log(
-    `- ${runtime.config.name} [${runtime.config.mode}] (chatId: ${runtime.config.chatId})`,
-  );
+  if (runtime.config.mode === "email") {
+    console.log(
+      `- ${runtime.config.name} [email] (chatId: ${runtime.config.chatId})`,
+    );
+  } else {
+    console.log(
+      `- ${runtime.config.name} [${runtime.config.mode}] (chatId: ${runtime.config.chatId})`,
+    );
+  }
 }
 
-whatsappClient.initialize();
+if (whatsappBots.length > 0) {
+  whatsappClient.initialize();
+}
