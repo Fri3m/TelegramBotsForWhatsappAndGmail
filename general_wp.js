@@ -192,7 +192,7 @@ export function registerGeneralHandlers({
     if (!parsed) {
       telegramBot.sendMessage(
         authorizedChatId,
-        "Kullanim: /send <isim> <mesaj> veya /send \"isim soyisim\" <mesaj>",
+        'Kullanim: /send <isim> <mesaj> veya /send "isim soyisim" <mesaj>',
       );
       return;
     }

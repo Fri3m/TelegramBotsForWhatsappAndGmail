@@ -127,15 +127,13 @@ const getChatByIdFromDb = db.prepare(`
 `);
 
 const resetChatState = db.prepare(`
-  INSERT INTO chat_state (chat_id, last_reset_at)
+  INSERT OR REPLACE INTO chat_state (chat_id, last_reset_at)
   VALUES (?, CURRENT_TIMESTAMP)
-  ON CONFLICT(chat_id) DO UPDATE SET last_reset_at = CURRENT_TIMESTAMP
 `);
 
 const resetAllChatStates = db.prepare(`
-  INSERT INTO chat_state (chat_id, last_reset_at)
+  INSERT OR REPLACE INTO chat_state (chat_id, last_reset_at)
   SELECT id, CURRENT_TIMESTAMP FROM chats
-  ON CONFLICT(chat_id) DO UPDATE SET last_reset_at = excluded.last_reset_at
 `);
 
 const getChatStats = db.prepare(`
