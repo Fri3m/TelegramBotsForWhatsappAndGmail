@@ -668,26 +668,36 @@ async function sendMediaToRuntime(
   const chatId = runtime.config.chatId;
   let sentMessage = null;
   const ext = getExtensionFromMime(mimeType);
-  const namedFile = {
-    source: mediaBuffer,
-    filename: `whatsapp-media.${ext}`,
+  const filename = `whatsapp-media.${ext}`;
+  const fileOptions = {
+    filename,
+    contentType: mimeType,
   };
 
+  const captionText = caption.replace(/\\/g, "");
   if (mimeType.startsWith("image/")) {
-    sentMessage = await runtime.bot.sendPhoto(chatId, namedFile, {
-      caption: caption.replace(/\\/g, ""),
+    sentMessage = await runtime.bot.sendPhoto(chatId, mediaBuffer, {
+      caption: captionText,
+      filename: fileOptions.filename,
+      contentType: fileOptions.contentType,
     });
   } else if (mimeType.startsWith("video/")) {
-    sentMessage = await runtime.bot.sendVideo(chatId, namedFile, {
-      caption: caption.replace(/\\/g, ""),
+    sentMessage = await runtime.bot.sendVideo(chatId, mediaBuffer, {
+      caption: captionText,
+      filename: fileOptions.filename,
+      contentType: fileOptions.contentType,
     });
   } else if (mimeType.startsWith("audio/")) {
-    sentMessage = await runtime.bot.sendAudio(chatId, namedFile, {
-      caption: caption.replace(/\\/g, ""),
+    sentMessage = await runtime.bot.sendAudio(chatId, mediaBuffer, {
+      caption: captionText,
+      filename: fileOptions.filename,
+      contentType: fileOptions.contentType,
     });
   } else {
-    sentMessage = await runtime.bot.sendDocument(chatId, namedFile, {
-      caption: caption.replace(/\\/g, ""),
+    sentMessage = await runtime.bot.sendDocument(chatId, mediaBuffer, {
+      caption: captionText,
+      filename: fileOptions.filename,
+      contentType: fileOptions.contentType,
     });
   }
 
@@ -724,15 +734,16 @@ async function sendMediaToAllBots(message, caption, whatsappChatId = null) {
           whatsappChatId,
         );
       } catch (error) {
+        console.error(`Failed to send media to bot ${runtime.config?.name}:`, error);
         await sendToRuntime(
           runtime,
-          caption + "\n\n_[Media failed to send]_",
+          caption + "\n\n_[Media failed to send: " + (error && error.message ? error.message : "") + "]_",
           whatsappChatId,
         );
       }
     }
   } catch (error) {
-    console.error("Media processing failed:", error.message);
+    console.error("Media processing failed:", error);
   }
 }
 
@@ -831,6 +842,9 @@ whatsappClient.on("message", async (message) => {
     let dbBody = message.body || "";
     let dbType = message.type;
 
+    // Ensure chat row exists before inserting media/files (prevents FK errors)
+    insertChat.run(chatId, chatName);
+
     if (message.hasMedia) {
       const skipStorage = shouldSkipMediaStorage(chatId, chatName);
       dbBody = "[media]";
@@ -889,7 +903,6 @@ whatsappClient.on("message", async (message) => {
       }
     }
 
-    insertChat.run(chatId, chatName);
     insertMessage.run(chatId, senderName, dbBody, dbType);
 
     const caption = formatMessage(message, contact, chat);
