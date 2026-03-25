@@ -244,11 +244,17 @@ function saveMediaStorageRules(rules) {
   const rulesPath = path.resolve("./media-rules.json");
   const payload = {
     skipMediaStorageChatIds: Array.isArray(rules.skipMediaStorageChatIds)
-      ? Array.from(new Set(rules.skipMediaStorageChatIds.map((x) => String(x).trim()))).filter(Boolean)
-      : [],
-    skipMediaStorageNamePatterns: Array.isArray(rules.skipMediaStorageNamePatterns)
       ? Array.from(
-          new Set(rules.skipMediaStorageNamePatterns.map((x) => String(x).trim())),
+          new Set(rules.skipMediaStorageChatIds.map((x) => String(x).trim())),
+        ).filter(Boolean)
+      : [],
+    skipMediaStorageNamePatterns: Array.isArray(
+      rules.skipMediaStorageNamePatterns,
+    )
+      ? Array.from(
+          new Set(
+            rules.skipMediaStorageNamePatterns.map((x) => String(x).trim()),
+          ),
         ).filter(Boolean)
       : [],
   };
@@ -356,14 +362,19 @@ function runDailyMediaCleanup() {
         try {
           fs.unlinkSync(absolutePath);
         } catch (error) {
-          console.error(`Failed to delete media file ${absolutePath}:`, error.message);
+          console.error(
+            `Failed to delete media file ${absolutePath}:`,
+            error.message,
+          );
         }
       }
     }
 
     const result = deleteMediaRecordsOlderThanOneWeek.run();
     if (oldRows.length > 0 || result.changes > 0) {
-      console.log(`Daily media cleanup: removed ${result.changes} media DB row(s).`);
+      console.log(
+        `Daily media cleanup: removed ${result.changes} media DB row(s).`,
+      );
     }
   } catch (error) {
     console.error("Daily media cleanup failed:", error.message);
@@ -734,10 +745,16 @@ async function sendMediaToAllBots(message, caption, whatsappChatId = null) {
           whatsappChatId,
         );
       } catch (error) {
-        console.error(`Failed to send media to bot ${runtime.config?.name}:`, error);
+        console.error(
+          `Failed to send media to bot ${runtime.config?.name}:`,
+          error,
+        );
         await sendToRuntime(
           runtime,
-          caption + "\n\n_[Media failed to send: " + (error && error.message ? error.message : "") + "]_",
+          caption +
+            "\n\n_[Media failed to send: " +
+            (error && error.message ? error.message : "") +
+            "]_",
           whatsappChatId,
         );
       }
